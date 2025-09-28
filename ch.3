@@ -1,0 +1,460 @@
+library(brms)
+library(tidyverse)
+library(tidybayes)
+library(asreml)
+library(ggplot2)
+library(patchwork)
+######
+#figure 1
+pheno.bw$geno <- factor(pheno.bw$geno, 
+                        levels = c("BW", "ELF3", "PHYC"), 
+                        labels = c("BWWT", "BWELF3", "BWPHYC"))
+
+
+pheno=rbind(pheno.bw,pheno.fam5)
+
+pheno$group <- ifelse(pheno$geno %in% c("BWWT", "BWELF3", "BWPHYC"), "bw", "heb")
+
+p=ggplot(pheno, aes(x = env, y = GDD)) + 
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6,size=2) +
+  geom_jitter(aes(x = env, y = GDD, colour = geno), width = 0.1, alpha = 0.2) + 
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  theme_minimal() +
+  facet_wrap(~group, labeller = as_labeller(c(bw = "Bowman group", heb = "HEB group"))) +  # Custom titles for facets
+  theme(
+    axis.text.x = element_text(size = 13),  # Increase x-axis label size
+    axis.text.y = element_text(size = 13),  # Increase y-axis label size
+    axis.title.x = element_text(size = 13), # Increase x-axis title size
+    axis.title.y = element_text(size = 13), # Increase y-axis title size
+    strip.text = element_text(size = 13, face = "bold") 
+  )
+
+ggsave("C:/Users//NRossi/OneDrive - SRUC//photoperiod.model.2025//figure 1.svg", p, device = "tiff", width = 12, height = 8, dpi = 600)
+#######
+#HEB group modelling
+######
+pheno.ppdh1hv <- pheno.fam5 %>%
+  filter(geno %in% c("ELF3hsp/PPDH1hv", "ELF3hv/PPDH1hv")) %>%
+  mutate(geno = factor(geno))  # Ensure it's a factor with only 2 levels
+
+
+
+bilinear_formula <- bf( GDD~
+  # Piecewise definition:
+  (photoperiod < 20) * (alpha + beta * (photoperiod - 20)) +
+    (photoperiod >= 20) * alpha,
+  
+  # Priors or model structures for the parameters:
+  alpha ~ 1+ (1 | geno), # genotype-specific intercept
+  beta ~ 1 ,   # overall (shared) slopes
+  nl=T
+)
+
+
+# Fit the Bayesian hierarchical model
+model_ppdh1hv <- brm(
+  formula = bilinear_formula,
+  data = pheno.ppdh1hv,
+  family = gaussian(),
+  chains = 4,
+  iter = 2000,
+  cores = 4,
+  control = list(adapt_delta = 0.95)
+)
+
+
+# Extract fitted values
+model.b.ppdh1hv <- pheno.ppdh1hv %>%
+  add_fitted_draws(model_ppdh1hv, value = ".fitted") %>%
+  group_by(geno, photoperiod) %>%
+  summarise(GDD_fitted = mean(.fitted), .groups = "drop") %>%
+  right_join(pheno.ppdh1hv, by = c("geno", "photoperiod")) %>%
+  mutate(GDD_residuals = GDD - GDD_fitted)
+
+########
+pheno.ppdh1hsp <- pheno.fam5 %>%
+  filter(geno %in% c("ELF3hsp/PPDH1hsp", "ELF3hv/PPDH1hsp")) %>%
+  mutate(geno = factor(geno))  # Ensure it's a factor with only 2 levels
+
+
+
+# Define the bilinear formula with hierarchical intercepts and shared slope
+bilinear_formula <- bf(
+  GDD ~ a,
+    a ~ 1, 
+  nl=T# Shared slope
+)
+
+
+# Fit the Bayesian hierarchical model
+model_ppdh1hsp <- brm(
+  formula = bilinear_formula,
+  data = pheno.ppdh1hsp,
+  family = gaussian(),
+  chains = 4,
+  iter = 2000,
+  cores = 4,
+  control = list(adapt_delta = 0.95)
+)
+
+
+# Extract fitted values
+model.b.ppdh1hsp <- pheno.ppdh1hsp %>%
+  add_fitted_draws(model_ppdh1hsp, value = ".fitted") %>%
+  group_by(geno, photoperiod) %>%
+  summarise(GDD_fitted = mean(.fitted), .groups = "drop") %>%
+  right_join(pheno.ppdh1hsp, by = c("geno", "photoperiod")) %>%
+  mutate(GDD_residuals = GDD - GDD_fitted)
+
+
+
+heb.group=rbind(model.b.ppdh1hv,model.b.ppdh1hsp)
+
+# Calculate R-squared
+SST <- sum((na.omit(heb.group$GDD) - mean(na.omit(heb.group$GDD)))^2)
+SSE <- sum(na.omit(heb.group$GDD_residuals)^2)
+r_squared.heb.group <- 1 - (SSE / SST)
+
+# Plot
+p <- ggplot(heb.group, aes(x = env, y = GDD_fitted)) + 
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6,size=2) +
+  geom_jitter(aes(x = env, y = GDD, colour = geno), width = 0.1, alpha = 0.2) + 
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", title = "HEB group", color = "Genotype") +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 13),
+    axis.text.y = element_text(size = 13),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+    strip.text = element_text(size = 13, face = "bold")
+  )
+
+ggsave("C:/Users//NRossi/OneDrive - SRUC//THESIS//photoperiod.model.2025//model.b.hierarchical.svg", p, device = "tiff", width = 12, height = 8, dpi = 600)
+
+
+######
+#bowman group modelling
+######
+
+pheno.bw <- pheno.bw %>%
+  mutate(geno = factor(geno))
+
+
+bilinear_formula <- bf( GDD~
+  # Piecewise definition:
+  (photoperiod < 20) * (alpha + beta * (photoperiod - 20)) +
+    (photoperiod >= 20) * alpha,
+  
+  # Priors or model structures for the parameters:
+  alpha ~ 1,                # overall (shared) intercept
+  beta ~ 1 + (1 | geno),   # genotype-specific slopes
+  nl    = TRUE              # use 'nonlinear' mode in brms
+)
+
+model <- brm(
+  formula = bilinear_formula,
+  data = pheno.bw,
+  family = gaussian(),
+  chains = 4,
+  iter = 500,
+  cores = 4,
+  control = list(adapt_delta = 0.95)
+)
+
+
+# Extract fitted values
+bw.group <- pheno.bw %>%
+  add_fitted_draws(model, value = ".fitted") %>%
+  group_by(geno, photoperiod) %>%
+  summarise(GDD_fitted = mean(.fitted), .groups = "drop") %>%
+  right_join(pheno.bw, by = c("geno", "photoperiod")) %>%
+  mutate(GDD_residuals = GDD - GDD_fitted)
+
+SST <- sum((na.omit(model.a$GDD) - mean(na.omit(model.a$GDD)))^2)
+SSE <- sum(na.omit(model.a$GDD_residuals)^2)
+
+# Calculate R-squared
+r_squared.br.group <- 1 - (SSE / SST)
+
+p=ggplot(bw.group, aes(x =env, y = GDD_fitted)) + 
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6) +
+  geom_jitter(aes(x = env, y = GDD, colour = geno), width = 0.1, alpha = 0.2) + 
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", title = "Bowman group - Model A", color = "Genotype") +  # Assuming you meant `exp`, since `type` is not in `pheno.fam5`
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(size = 13),  # Increase x-axis label size
+    axis.text.y = element_text(size = 13),  # Increase y-axis label size
+    axis.title.x = element_text(size = 13), # Increase x-axis title size
+    axis.title.y = element_text(size = 13),  # Increase y-axis title size
+    strip.text = element_text(size = 13, face = "bold") 
+  )
+
+ggsave("C:/Users//NRossi/OneDrive - SRUC//photoperiod.model.2025//model.a.tiff", p, device = "tiff", width = 12, height = 8, dpi = 600)
+
+#####
+#figure2
+#####
+bw.group$group <- "model.e"
+heb.group$group <- "model.h"
+models <- rbind(bw.group, heb.group)
+p=ggplot(models, aes(x = env, y = GDD_fitted)) + 
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6,size=2) +
+  geom_jitter(aes(x = env, y = GDD, colour = geno), width = 0.1, alpha = 0.2) + 
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  theme_minimal() +
+  facet_wrap(~group, labeller = as_labeller(c(model.e = "Bowman group - Model E", model.h = "HEB group - Model H"))) +  # Custom titles for facets
+  theme(
+    axis.text.x = element_text(size = 13),  # Increase x-axis label size
+    axis.text.y = element_text(size = 13),  # Increase y-axis label size
+    axis.title.x = element_text(size = 13), # Increase x-axis title size
+    axis.title.y = element_text(size = 13), # Increase y-axis title size
+    strip.text = element_text(size = 13, face = "bold") 
+  )
+ggsave("C:/Users//NRossi/OneDrive - SRUC//THESIS//photoperiod.model.2025//final//figure 3(1).tiff", p, device = "tiff", width = 12, height = 8, dpi = 600)
+
+
+
+
+# Overall mean and standard deviation of GDD
+overall_mean <- mean(pheno.bw$GDD, na.rm = TRUE)
+overall_sd <- sd(pheno.bw$GDD, na.rm = TRUE)
+
+# Print overall results
+cat("Overall GDD mean:", overall_mean, "\n")
+cat("Overall GDD SD:", overall_sd, "\n")
+
+# Mean and SD of GDD by geno
+library(dplyr)
+
+pheno.bw %>%
+  group_by(geno,photoperiod) %>%
+  summarise(
+    mean_GDD = mean(GDD, na.rm = TRUE),
+    sd_GDD = sd(GDD, na.rm = TRUE),
+    .groups = "drop"
+  )
+
+
+#combined plots
+######
+# Add "type" column to both dataframes
+pheno_plot <- pheno %>%
+  mutate(type = "observed")  # 306 rows
+
+models_plot <- models %>%
+  mutate(type = "modeled")  # 306 rows
+
+combined_plot <- bind_rows(pheno_plot, models_plot)
+combined_plot$geno <- factor(combined_plot$geno, levels = levels(pheno$geno))
+
+# Observed - Bowman (bw)
+p1 <- ggplot(filter(combined_plot, type == "observed", group == "bw"),
+             aes(x = env, y = GDD)) +
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6, size = 2) +
+  geom_jitter(aes(colour = geno), width = 0.1, alpha = 0.2) +
+  labs(title = "Observed - Bowman group",
+       x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  theme_minimal(base_size = 13) +
+  theme(strip.text = element_text(face = "bold"))
+
+# Observed - HEB (heb)
+p2 <- ggplot(filter(combined_plot, type == "observed", group == "heb"),
+             aes(x = env, y = GDD)) +
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6, size = 2) +
+  geom_jitter(aes(colour = geno), width = 0.1, alpha = 0.2) +
+  labs(title = "Observed - HEB group",
+       x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  theme_minimal(base_size = 13) +
+  theme(strip.text = element_text(face = "bold"))
+
+# Modeled - Bowman (model.e)
+p3 <- ggplot(filter(combined_plot, type == "modeled", group == "model.e"),
+             aes(x = env, y = GDD_fitted)) +
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6, size = 2) +
+  geom_jitter(aes(y = GDD, colour = geno), width = 0.1, alpha = 0.2) +
+  labs(title = "Modeled - Bowman group",
+       x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  theme_minimal(base_size = 13) +
+  theme(strip.text = element_text(face = "bold"))
+
+# Modeled - HEB (model.h)
+p4 <- ggplot(filter(combined_plot, type == "modeled", group == "model.h"),
+             aes(x = env, y = GDD_fitted)) +
+  geom_line(stat = 'summary', fun = 'mean', aes(group = geno, colour = geno), alpha = 0.6, size = 2) +
+  geom_jitter(aes(y = GDD, colour = geno), width = 0.1, alpha = 0.2) +
+  labs(title = "Modeled - HEB group",
+       x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  theme_minimal(base_size = 13) +
+  theme(strip.text = element_text(face = "bold"))
+
+# Get the combined Y range for both GDD and GDD_fitted
+y_limits <- range(c(combined_plot$GDD, combined_plot$GDD_fitted), na.rm = TRUE)
+p1 <- p1 + scale_y_continuous(limits = y_limits)
+p2 <- p2 + scale_y_continuous(limits = y_limits)
+p3 <- p3 + scale_y_continuous(limits = y_limits)
+p4 <- p4 + scale_y_continuous(limits = y_limits)
+y_limits <- c(500, 1000)
+
+
+
+final_plot <- (p1 + p2) / (p3 + p4) +
+  plot_layout(guides = "collect") &
+  theme(legend.position = "bottom") &
+  plot_annotation(tag_levels = 'A')
+
+final_plot
+
+ggsave("C:/Users//NRossi/OneDrive - SRUC//THESIS//final//ch.3//final//figure1.tiff", final_plot, device = "tiff", width = 16, height = 20, dpi = 600)
+
+
+
+#########
+#combined plots #2
+######
+
+# Define consistent, bright manual colors for genotypes
+my_colors <- c(
+  "BWWT" = "#E41A1C",
+  "BWELF3" = "#377EB8",
+  "BWPPDH1" = "#4DAF4A",
+  "ELF3hsp/PPDH1hsp" = "#984EA3",
+  "ELF3hv/PPDH1hsp" = "#FF7F00",
+  "ELF3hv/PPDH1hv" = "#00CED1",
+  "ELF3hsp/PPDH1hv" = "#A65628"
+)
+
+# Common theme settings
+common_theme <- theme_minimal(base_size = 13) +
+  theme(
+    axis.text.x = element_text(size = 13),
+    axis.text.y = element_text(size = 13),
+    axis.title.x = element_text(size = 13),
+    axis.title.y = element_text(size = 13),
+    strip.text = element_text(size = 13, face = "bold")
+  )
+
+# Define consistent y-axis limits
+y_limits <- c(min(pheno$GDD, models$GDD, na.rm = TRUE),
+              max(pheno$GDD, models$GDD_fitted, na.rm = TRUE))
+
+# === Plot 1: Observed data (BW group) ===
+p1 <- ggplot(subset(pheno, group == "bw"), aes(x = env, y = GDD)) +
+  geom_line(stat = "summary", fun = "mean", aes(group = geno, colour = geno), size = 2) +
+  geom_jitter(aes(colour = geno), width = 0.1, shape = 1, size = 2, stroke = 1) +
+  scale_color_manual(values = my_colors) +
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  facet_wrap(~group, labeller = as_labeller(c(bw = "Bowman group"))) +
+  coord_cartesian(ylim = y_limits) +
+  common_theme
+
+# === Plot 2: Observed data (HEB group) ===
+p2 <- ggplot(subset(pheno, group == "heb"), aes(x = env, y = GDD)) +
+  geom_line(stat = "summary", fun = "mean", aes(group = geno, colour = geno), size = 2) +
+  geom_jitter(aes(colour = geno), width = 0.1, shape = 1, size = 2, stroke = 1) +
+  scale_color_manual(values = my_colors) +
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  facet_wrap(~group, labeller = as_labeller(c(heb = "HEB group"))) +
+  coord_cartesian(ylim = y_limits) +
+  common_theme
+
+# === Plot 3: Modeled data (BW group - Model E) ===
+p3 <- ggplot(subset(models, group == "model.e"), aes(x = env, y = GDD_fitted)) +
+  geom_line(stat = "summary", fun = "mean", aes(group = geno, colour = geno), size = 2) +
+  geom_jitter(aes(y = GDD, colour = geno), width = 0.1, shape = 1, size = 2, stroke = 1) +
+  scale_color_manual(values = my_colors) +
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  facet_wrap(~group, labeller = as_labeller(c(model.e = "Bowman group – Model E"))) +
+  coord_cartesian(ylim = y_limits) +
+  common_theme
+
+# === Plot 4: Modeled data (HEB group - Model H) ===
+p4 <- ggplot(subset(models, group == "model.h"), aes(x = env, y = GDD_fitted)) +
+  geom_line(stat = "summary", fun = "mean", aes(group = geno, colour = geno), size = 2) +
+  geom_jitter(aes(y = GDD, colour = geno), width = 0.1, shape = 1, size = 2, stroke = 1) +
+  scale_color_manual(values = my_colors) +
+  labs(x = "Day length (hours)", y = "Thermal Time to Heading (°C d)", color = "Genotype") +
+  facet_wrap(~group, labeller = as_labeller(c(model.h = "HEB group – Model H"))) +
+  coord_cartesian(ylim = y_limits) +
+  common_theme
+
+final_plot <- (p1 + p2) / (p3 + p4) +
+  plot_layout(guides = "collect") &
+  theme(
+    legend.position = "bottom",
+    legend.box = "horizontal",
+    legend.margin = margin(t = 10),
+    plot.margin = margin(10, 10, 20, 10),
+    legend.key = element_rect(color = NA),  # cleaner keys
+    legend.title = element_text(size = 12),
+    legend.text = element_text(size = 11)
+  ) &
+  plot_annotation(tag_levels = "A")
+
+final_plot
+
+ggsave("C:/Users//NRossi/OneDrive - SRUC//THESIS//final//ch.3//final//figure1.tiff", final_plot, device = "tiff", width = 20, height = 20, dpi = 600)
+
+
+######
+#figure 3
+#####
+levels_to_keep <- c("ELF3")
+subset_df <- pheno[pheno$Gene %in% levels_to_keep, ]
+level_order <- c('ZT5', 'ZT11', 'ZT17','ZT23') 
+
+
+p=ggplot(subset_df, aes(x = factor(Time.point,level=level_order), y =RFC)) + geom_line(stat='summary',fun='mean',aes(group=ELF3allele,colour=ELF3allele))+
+  geom_jitter(aes(x=Time.point,y=RFC,colour=ELF3allele),width=0.1,alpha=0.2)+ #ylim(-3,15)+
+  labs(x = "Hours after lights on", y = "log(Relative fold change)",title="ELF3")+
+  theme_minimal()+
+  facet_wrap(~Condition)+
+  theme(
+    strip.text = element_text(size = 14),  # Increase facet title size
+    axis.text.x = element_text(size = 12), # Increase x-axis label size
+    axis.title.x = element_text(size = 14),# Increase x-axis title size
+    axis.title.y = element_text(size = 14) # Increase y-axis title size
+  )
+
+ggsave("C:/Users//NRossi/OneDrive - SRUC//photoperiod.model.2025//figure4.tiff", p, device = "tiff", width = 12, height = 8, dpi = 600)
+#####
+#figure 4
+#####
+levels_to_keep <- c("PPD-H1","FT1")
+subset_df <- pheno[pheno$Gene %in% levels_to_keep, ]
+level_order <- c('ZT5', 'ZT11', 'ZT17','ZT23') 
+p=ggplot(subset_df, aes(x = factor(Time.point,level=level_order), y =log(RFC))) + geom_line(stat='summary',fun='mean',aes(group=Genotype,colour=Genotype))+
+  geom_jitter(aes(x=Time.point,y=log(RFC),colour=Genotype),width=0.1,alpha=0.2)+ ylim(-3,15)+
+  labs(x = "Hours after lights on", y = "log(Relative fold change)")+
+  theme_minimal()+
+  facet_wrap(~Condition ~ Gene)+
+  theme(
+    strip.text = element_text(size = 14),  # Increase facet title size
+    axis.text.x = element_text(size = 12), # Increase x-axis label size
+    axis.title.x = element_text(size = 14),# Increase x-axis title size
+    axis.title.y = element_text(size = 14) # Increase y-axis title size
+  )
+
+ggsave("C:/Users//NRossi/OneDrive - SRUC//photoperiod.model.2025//figure5.tiff", p, device = "tiff", width = 12, height = 10, dpi = 600)
+#####
+#figure 5
+#####
+levels_to_keep <- c("FT1","PPD-H1")
+subset_df <- pheno[pheno$Gene %in% levels_to_keep, ] %>% droplevels()
+
+level_order <- c('ZT5', 'ZT11', 'ZT17','ZT23') 
+
+p=ggplot(subset_df, aes(x = factor(Time.point, levels = level_order), y = log(RFC))) + 
+  geom_line(stat = 'summary', fun = 'mean', aes(group = Condition, colour = Condition)) +
+  geom_jitter(aes(x = Time.point, y = log(RFC), colour = Condition), width = 0.1, alpha = 0.2) +
+  ylim(-3, 15) +
+  labs(x = "Hours after lights on", y = "log(Relative fold change)") +
+  theme_minimal() +
+  facet_grid(Genotype ~ Gene) +  # Facet by both Gene (rows) and Genotype (columns)
+  theme(
+    strip.text = element_text(size = 12),
+    strip.text.y = element_text(size = 10),# Increase facet title size
+    axis.text.x = element_text(size = 12), # Increase x-axis label size
+    axis.title.x = element_text(size = 12),# Increase x-axis title size
+    axis.title.y = element_text(size = 12) # Increase y-axis title size
+  )
+ggsave("C:/Users//NRossi/OneDrive - SRUC//photoperiod.model.2025//figure6.tiff", p, device = "tiff", width = 8, height = 11, dpi = 600)
